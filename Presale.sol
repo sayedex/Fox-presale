@@ -67,7 +67,8 @@ contract FOX_PRESALE is Ownable {
     function buyTokens(
         uint256 _tokenId,
         uint256 _tokenAmount,
-        uint256 _poolId
+        uint256 _poolId,
+        address referrer
     ) external {
         require(
             tokenInfo[_tokenId]._tokenaddress != address(0),
@@ -90,6 +91,7 @@ contract FOX_PRESALE is Ownable {
         }
 
         transferCurrency(token, address(this), msg.sender, immediateAmount);
+        _handleReferral(referrer, amountTokens, _poolId);
         emit TokensPurchased(msg.sender, amountTokens);
     }
 
@@ -115,6 +117,9 @@ contract FOX_PRESALE is Ownable {
         uint256 tokenamount,
         uint256 _poolId
     ) internal {
+        if (referrer == address(0)) {
+            return;
+        }
         uint256 _amount;
         _amount = (tokenamount * refferPercentage[_poolId]) / 100;
         if (WhiteListedUser[referrer]) {
