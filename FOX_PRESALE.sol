@@ -9,14 +9,21 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 contract FOX_PRESALE is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     address public token;
-    address public treasuryWallet;
-    uint256 public constant FIVE_MONTHS = 30 days * 5;
-    uint256 public constant ONE_YEAR = 365 days;
+    // uint256 public constant FIVE_MONTHS = 30 days * 5;
+    // uint256 public constant ONE_YEAR = 365 days;
+    uint256 public constant FIVE_MONTHS = 10 minutes;
+    uint256 public constant ONE_YEAR = 30 minutes;
+    uint256 public PRESALE_START = 0;
     uint256 public PRESALE_ENDTIME = 0;
     uint256 constant TotalRound = 2;
     uint256 public totalSold;
     uint256 public totalRaised;
     uint256 public nextTokenId;
+
+    address public treasuryWallet;
+
+    address public taxwalletA;
+    address public taxwalletB;
 
     struct PresaleRound {
         mapping(uint256 => uint256) tokenPrice;
@@ -37,6 +44,7 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
     struct WhiteListedUsers {
         uint256 Percentage;
         bool isWhiteListed;
+        uint256 usdtPercentage;
     }
 
     struct User {
@@ -54,20 +62,35 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
     mapping(uint256 => uint256) public roundDeadline;
     mapping(uint256 => mapping(address => WhiteListedUsers))
         public WhiteListedUser;
-    mapping(uint256 => uint256) public refferPercentage;
+    // for 1st pool its USDT - for 2nd pool its token amount
+    mapping(uint256 => uint256) public refferTokenPercentage;
+    mapping(uint256 => uint256) public refferUSDTPercentage;
+
     mapping(uint256 => uint256) public RoundVestingPercentage;
     mapping(address => User) private userToken;
+
+    // team payment
+    mapping(uint256 => mapping(address => bool)) public WhiteListedTaxUser;
 
     event TokensPurchased(address indexed buyer, uint256 amount);
     event TokensReleased(address indexed beneficiary, uint256 amount);
 
-    constructor(address _token, address _treasuryWallet)  {
+    constructor(
+        address _token,
+        address _treasuryWallet,
+        address _tokenAddress,
+        address _taxwalletA,
+        address _taxwalletB
+    ) Ownable(msg.sender) {
         token = (_token);
         treasuryWallet = _treasuryWallet;
-        PRESALE_ENDTIME = 1716873345;
+        PRESALE_ENDTIME = block.timestamp + 10 minutes;
+        PRESALE_START = block.timestamp;
         // reffer
-        refferPercentage[0] = 10;
-        refferPercentage[1] = 20;
+        refferTokenPercentage[0] = 10;
+        refferTokenPercentage[1] = 20;
+        refferUSDTPercentage[0] = 10;
+        refferUSDTPercentage[1] = 20;
         RoundVestingPercentage[0] = 30;
         RoundVestingPercentage[1] = 60;
 
@@ -76,9 +99,18 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
 
         presalePool[0].tokenPrice[0] = 2000000000000000000;
         presalePool[1].tokenPrice[0] = 2000000000000000000;
-    }
 
-    
+        taxwalletA = _taxwalletA;
+        taxwalletB = _taxwalletB;
+
+        // set payment token
+        require(_tokenAddress != address(0), "Invalid token address");
+        tokenInfo[nextTokenId] = PaymentToken({
+            _tokenaddress: _tokenAddress,
+            _decimals: IERC20Metadata(_tokenAddress).decimals()
+        });
+        nextTokenId++;
+    }
 
     function buyTokensVesting(
         uint256 _tokenId,
@@ -91,9 +123,9 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
             "Payment token not set"
         );
         require(_poolId == 1, "_poolId not set");
-          transferCurrency(
+        transferCurrency(
             tokenInfo[_tokenId]._tokenaddress,
-              msg.sender,
+            msg.sender,
             address(this),
             _tokenAmount
         );
@@ -118,7 +150,14 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
         presalePool[_poolId].tokensSold += amountTokens;
         totalSold += amountTokens;
         totalRaised += _tokenAmount;
-        _processPayment_pool_2(_tokenId,_tokenAmount,amountTokens,_poolId,_referrer);
+        _processPayment_pool_2(
+            msg.sender,
+            _tokenId,
+            _tokenAmount,
+            amountTokens,
+            _poolId,
+            _referrer
+        );
         for (uint256 i = 0; i < TotalRound; i++) {
             schedule.vestingRecords[i] = VestingRecord({
                 amount: (amountTokens * RoundVestingPercentage[i]) / 100,
@@ -127,7 +166,7 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
             });
         }
 
-        transferCurrency(token,treasuryWallet, buyer, immediateAmount);
+        transferCurrency(token, treasuryWallet, buyer, immediateAmount);
         emit TokensPurchased(buyer, amountTokens);
     }
 
@@ -146,19 +185,26 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
             _tokenAmount) / 10**tokenInfo[_tokenId]._decimals;
         transferCurrency(
             tokenInfo[_tokenId]._tokenaddress,
-           msg.sender,
+            msg.sender,
             address(this),
             _tokenAmount
         );
         presalePool[_poolId].tokensSold += amountTokens;
         totalSold += amountTokens;
         totalRaised += _tokenAmount;
-        _processPayment_pool_1(_tokenId,_tokenAmount,_poolId,_referrer);
+        _processPayment_pool_1(
+            msg.sender,
+            _tokenId,
+            _tokenAmount,
+            _poolId,
+            _referrer
+        );
         transferCurrency(token, treasuryWallet, msg.sender, amountTokens);
         emit TokensPurchased(msg.sender, amountTokens);
     }
 
     function _processPayment_pool_1(
+        address _buyer,
         uint256 _tokenId,
         uint256 _tokenAmount,
         uint256 _poolId,
@@ -176,7 +222,9 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
                         WhiteListedUser[_poolId][_referrer].Percentage) /
                     100;
             } else {
-                _referrerAmount = (_tokenAmount * refferPercentage[_poolId]) / 100;
+                _referrerAmount =
+                    (_tokenAmount * refferUSDTPercentage[_poolId]) /
+                    100;
             }
 
             _amount = _tokenAmount - _referrerAmount;
@@ -189,24 +237,35 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
             );
         }
 
-        uint256 _tokenAmounts1 = (_amount * 5) / 100;
+        if (!WhiteListedTaxUser[_poolId][_buyer]) {
+            uint256 _tax1 = (_amount * 6) / 100;
+            uint256 _tax2 = (_amount * 14) / 100;
+            _amount = _amount - (_tax1 + _tax2);
+            transferCurrency(
+                tokenInfo[_tokenId]._tokenaddress,
+                address(this),
+                taxwalletA,
+                _tax1
+            );
+
+            transferCurrency(
+                tokenInfo[_tokenId]._tokenaddress,
+                address(this),
+                taxwalletA,
+                _tax2
+            );
+        }
 
         transferCurrency(
             tokenInfo[_tokenId]._tokenaddress,
             address(this),
             treasuryWallet,
-            _tokenAmounts1
-        );
-
-        transferCurrency(
-            tokenInfo[_tokenId]._tokenaddress,
-            address(this),
-            treasuryWallet,
-            _amount - _tokenAmounts1
+            _amount
         );
     }
 
     function _processPayment_pool_2(
+        address _buyer,
         uint256 _tokenId,
         uint256 _tokenAmount,
         uint256 _amountTokens,
@@ -221,17 +280,26 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
         if (_referrer == address(0)) {
             _amount = _tokenAmount;
         } else {
-            _reffer_usdt = (_tokenAmount * 5) / 100;
-            _amount = _tokenAmount - _reffer_usdt;
             if (WhiteListedUser[_poolId][_referrer].isWhiteListed) {
                 _referrerAmount =
                     (_amountTokens *
                         WhiteListedUser[_poolId][_referrer].Percentage) /
                     100;
-            } else {
-                _referrerAmount = (_amountTokens * refferPercentage[_poolId]) / 100;
-            }
 
+                _reffer_usdt =
+                    (_tokenAmount *
+                        WhiteListedUser[_poolId][_referrer].usdtPercentage) /
+                    100;
+            } else {
+                _referrerAmount =
+                    (_amountTokens * refferTokenPercentage[_poolId]) /
+                    100;
+
+                _reffer_usdt =
+                    (_tokenAmount * refferUSDTPercentage[_poolId]) /
+                    100;
+            }
+            _amount = _tokenAmount - _reffer_usdt;
             _referrerImmediateAmount = (_referrerAmount * 10) / 100;
             VestingSchedule storage referrerSchedule = vestingSchedules[
                 _referrer
@@ -240,7 +308,8 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
             if (referrerSchedule.vestingRecords[0].amount == 0) {
                 for (uint256 i = 0; i < TotalRound; i++) {
                     referrerSchedule.vestingRecords[i] = VestingRecord({
-                        amount: (_amount * RoundVestingPercentage[i]) / 100,
+                        amount: (_referrerAmount * RoundVestingPercentage[i]) /
+                            100,
                         deadline: roundDeadline[i],
                         claimed: false
                     });
@@ -248,7 +317,7 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
             } else {
                 for (uint256 i = 0; i < TotalRound; i++) {
                     referrerSchedule.vestingRecords[i].amount +=
-                        (_amount * RoundVestingPercentage[i]) /
+                        (_referrerAmount * RoundVestingPercentage[i]) /
                         100;
                 }
             }
@@ -267,21 +336,30 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
             );
         }
 
-        uint256 _tokenAmounts1 = (_amount * 5) / 100;
+        if (!WhiteListedTaxUser[_poolId][_buyer]) {
+            uint256 _tax1 = (_amount * 6) / 100;
+            uint256 _tax2 = (_amount * 14) / 100;
+            _amount = _amount - (_tax1 + _tax2);
+            transferCurrency(
+                tokenInfo[_tokenId]._tokenaddress,
+                address(this),
+                taxwalletA,
+                _tax1
+            );
 
+            transferCurrency(
+                tokenInfo[_tokenId]._tokenaddress,
+                address(this),
+                taxwalletA,
+                _tax2
+            );
+        }
 
         transferCurrency(
             tokenInfo[_tokenId]._tokenaddress,
             msg.sender,
             treasuryWallet,
-            _tokenAmounts1
-        );
-
-        transferCurrency(
-            tokenInfo[_tokenId]._tokenaddress,
-            msg.sender,
-            treasuryWallet,
-            _amount - _tokenAmounts1
+            _amount
         );
     }
 
@@ -335,6 +413,11 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
         PRESALE_ENDTIME = _PRESALE_ENDTIME;
     }
 
+    function setPresaleStartTime(uint256 _PRESALE_START) external onlyOwner {
+        require(block.timestamp > _PRESALE_START, "time short");
+        PRESALE_START = _PRESALE_START;
+    }
+
     function setPaymentToken(address _tokenAddress) external onlyOwner {
         require(_tokenAddress != address(0), "Invalid token address");
         tokenInfo[nextTokenId] = PaymentToken({
@@ -364,23 +447,56 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
         treasuryWallet = _newTreasuryWallet;
     }
 
-    function setRefferPercentage(uint256 _poolId, uint256 value)
+    function setTaxWalletA(address _taxwalletA) external onlyOwner {
+        require(
+            _taxwalletA != address(0),
+            "Invalid _taxwalletA wallet address"
+        );
+        taxwalletA = _taxwalletA;
+    }
+
+    function setTaxWalletB(address _taxwalletB) external onlyOwner {
+        require(
+            _taxwalletB != address(0),
+            "Invalid _taxwalletB wallet address"
+        );
+        taxwalletB = _taxwalletB;
+    }
+
+    function setRefferTokenPercentage(uint256 _poolId, uint256 value)
         external
         onlyOwner
     {
-        refferPercentage[_poolId] = value;
+        refferTokenPercentage[_poolId] = value;
+    }
+
+    function setRefferUSDTPercentage(uint256 _poolId, uint256 value)
+        external
+        onlyOwner
+    {
+        refferUSDTPercentage[_poolId] = value;
     }
 
     function setWhiteListedUser(
         uint256 _poolId,
         address _user,
         uint256 _percentage,
-        bool _isWhiteListed
+        bool _isWhiteListed,
+        uint256 _percentageusdt
     ) external onlyOwner {
         WhiteListedUser[_poolId][_user] = WhiteListedUsers({
             Percentage: _percentage,
-            isWhiteListed: _isWhiteListed
+            isWhiteListed: _isWhiteListed,
+            usdtPercentage: _percentageusdt
         });
+    }
+
+    function setWhiteListedTaxUser(
+        uint256 _poolId,
+        address _user,
+        bool value
+    ) external onlyOwner {
+        WhiteListedTaxUser[_poolId][_user] = value;
     }
 
     /// @dev Transfers a given amount of currency.
