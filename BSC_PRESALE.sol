@@ -5,10 +5,10 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "https://github.com/LayerZero-Labs/solidity-examples/blob/main/contracts/lzApp/NonblockingLzApp.sol";
 
-contract FOX_PRESALE is Ownable, ReentrancyGuard {
+contract FOX_PRESALE is ReentrancyGuard, NonblockingLzApp {
     using SafeERC20 for IERC20;
-    address public token;
     // uint256 public constant FIVE_MONTHS = 30 days * 5;
     // uint256 public constant ONE_YEAR = 365 days;
     uint256 public constant FIVE_MONTHS = 10 minutes;
@@ -58,7 +58,6 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
     }
     mapping(uint256 => PresaleRound) public presalePool;
     mapping(uint256 => PaymentToken) public tokenInfo;
-    mapping(address => VestingSchedule) public vestingSchedules;
     mapping(uint256 => uint256) public roundDeadline;
     mapping(uint256 => mapping(address => WhiteListedUsers))
         public WhiteListedUser;
@@ -76,13 +75,12 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
     event TokensReleased(address indexed beneficiary, uint256 amount);
 
     constructor(
-        address _token,
         address _treasuryWallet,
         address _tokenAddress,
         address _taxwalletA,
-        address _taxwalletB
-    ) Ownable(msg.sender) {
-        token = (_token);
+        address _taxwalletB,
+        address _lzEndpoint
+    ) Ownable(msg.sender) NonblockingLzApp(_lzEndpoint) {
         treasuryWallet = _treasuryWallet;
         PRESALE_ENDTIME = block.timestamp + 10 minutes;
         PRESALE_START = block.timestamp;
@@ -112,167 +110,27 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
         nextTokenId++;
     }
 
-    function buyTokensVesting(
-        uint256 _tokenId,
-        uint256 _tokenAmount,
-        uint256 _poolId,
-        address _referrer
-    ) external nonReentrant {
-        require(
-            tokenInfo[_tokenId]._tokenaddress != address(0),
-            "Payment token not set"
-        );
-        require(_poolId == 1, "_poolId not set");
+
+    function buyTokensA(uint256 _tokenId, uint256 _tokenAmount,       address _referrer)
+        external
+        nonReentrant
+    {
+        uint256 _poolId = 0;
+        uint256 amountTokens = (presalePool[0].tokenPrice[_tokenId] *
+            _tokenAmount) / 10**tokenInfo[_tokenId]._decimals;
+
         transferCurrency(
             tokenInfo[_tokenId]._tokenaddress,
             msg.sender,
             address(this),
             _tokenAmount
         );
+        _processPayment_pool_1(msg.sender,_tokenId,_tokenAmount,_poolId,_referrer);
 
-        _handleVesting(msg.sender, _tokenId, _tokenAmount, _poolId, _referrer);
+        // send layerzero request here..
     }
 
-    function _handleVesting(
-        address buyer,
-        uint256 _tokenId,
-        uint256 _tokenAmount,
-        uint256 _poolId,
-        address _referrer
-    ) internal {
-        uint256 amountTokens = (presalePool[_poolId].tokenPrice[_tokenId] *
-            _tokenAmount) / 10**tokenInfo[_tokenId]._decimals;
 
-        uint256 immediateAmount = (amountTokens * 10) / 100;
-        VestingSchedule storage schedule = vestingSchedules[buyer];
-
-        schedule.immediateAmount += immediateAmount;
-        presalePool[_poolId].tokensSold += amountTokens;
-        totalSold += amountTokens;
-        totalRaised += _tokenAmount;
-        _processPayment_pool_2(
-            msg.sender,
-            _tokenId,
-            _tokenAmount,
-            amountTokens,
-            _poolId,
-            _referrer
-        );
-        for (uint256 i = 0; i < TotalRound; i++) {
-            schedule.vestingRecords[i] = VestingRecord({
-                amount: (amountTokens * RoundVestingPercentage[i]) / 100,
-                deadline: roundDeadline[i],
-                claimed: false
-            });
-        }
-
-        transferCurrency(token, treasuryWallet, buyer, immediateAmount);
-        emit TokensPurchased(buyer, amountTokens);
-    }
-
-    function buyTokens(
-        uint256 _tokenId,
-        uint256 _tokenAmount,
-        uint256 _poolId,
-        address _referrer
-    ) external nonReentrant {
-        require(
-            tokenInfo[_tokenId]._tokenaddress != address(0),
-            "Payment token not set"
-        );
-        require(_poolId == 0, "_poolId not set");
-        uint256 amountTokens = (presalePool[_poolId].tokenPrice[_tokenId] *
-            _tokenAmount) / 10**tokenInfo[_tokenId]._decimals;
-        transferCurrency(
-            tokenInfo[_tokenId]._tokenaddress,
-            msg.sender,
-            address(this),
-            _tokenAmount
-        );
-        presalePool[_poolId].tokensSold += amountTokens;
-        totalSold += amountTokens;
-        totalRaised += _tokenAmount;
-        _processPayment_pool_1(
-            msg.sender,
-            _tokenId,
-            _tokenAmount,
-            _poolId,
-            _referrer
-        );
-        transferCurrency(token, treasuryWallet, msg.sender, amountTokens);
-        emit TokensPurchased(msg.sender, amountTokens);
-    }
-
-    function _processPayment_pool_1_cross(
-        uint256 _amount,
-        uint256 _tokenId,
-        address _user
-    ) internal {
-        transferCurrency(
-            tokenInfo[_tokenId]._tokenaddress,
-            address(this),
-            _user,
-            _amount
-        );
-    }
-
-    function _processPayment_pool_2_cross(
-        uint256 _amount,
-        uint256 _tokenAmount,
-        address _user,
-        uint256 _poolId,
-        address _referrer
-    ) internal {
-        uint256 immediateAmount = (_amount * 10) / 100;
-        uint256 _referrerAmount;
-        VestingSchedule storage schedule = vestingSchedules[_user];
-
-        schedule.immediateAmount += immediateAmount;
-        presalePool[_poolId].tokensSold += _amount;
-        totalSold += _amount;
-        totalRaised += _tokenAmount;
-
-        for (uint256 i = 0; i < TotalRound; i++) {
-            schedule.vestingRecords[i] = VestingRecord({
-                amount: (_amount * RoundVestingPercentage[i]) / 100,
-                deadline: roundDeadline[i],
-                claimed: false
-            });
-        }
-        transferCurrency(token, treasuryWallet, _user, immediateAmount);
-
-        if (_referrer != address(0)) {
-            if (WhiteListedUser[_poolId][_referrer].isWhiteListed) {
-                _referrerAmount =
-                    (_amount * WhiteListedUser[_poolId][_referrer].Percentage) /
-                    100;
-            } else {
-                _referrerAmount =
-                    (_amount * refferTokenPercentage[_poolId]) /
-                    100;
-            }
-        }
-        uint256 _referrerTokens = (_referrerAmount * 10) / 100;
-        VestingSchedule storage referrerSchedule = vestingSchedules[_referrer];
-
-        if (referrerSchedule.vestingRecords[0].amount == 0) {
-            for (uint256 i = 0; i < TotalRound; i++) {
-                referrerSchedule.vestingRecords[i] = VestingRecord({
-                    amount: (_referrerAmount * RoundVestingPercentage[i]) / 100,
-                    deadline: roundDeadline[i],
-                    claimed: false
-                });
-            }
-        } else {
-            for (uint256 i = 0; i < TotalRound; i++) {
-                referrerSchedule.vestingRecords[i].amount +=
-                    (_referrerAmount * RoundVestingPercentage[i]) /
-                    100;
-            }
-        }
-
-        transferCurrency(token, treasuryWallet, _referrer, _referrerTokens);
-    }
 
     function _processPayment_pool_1(
         address _buyer,
@@ -339,66 +197,27 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
         address _buyer,
         uint256 _tokenId,
         uint256 _tokenAmount,
-        uint256 _amountTokens,
         uint256 _poolId,
         address _referrer
     ) internal {
         uint256 _amount;
-        uint256 _referrerAmount;
         uint256 _reffer_usdt;
-        uint256 _referrerImmediateAmount;
 
         if (_referrer == address(0)) {
             _amount = _tokenAmount;
         } else {
             if (WhiteListedUser[_poolId][_referrer].isWhiteListed) {
-                _referrerAmount =
-                    (_amountTokens *
-                        WhiteListedUser[_poolId][_referrer].Percentage) /
-                    100;
-
                 _reffer_usdt =
                     (_tokenAmount *
                         WhiteListedUser[_poolId][_referrer].usdtPercentage) /
                     100;
             } else {
-                _referrerAmount =
-                    (_amountTokens * refferTokenPercentage[_poolId]) /
-                    100;
-
+        
                 _reffer_usdt =
                     (_tokenAmount * refferUSDTPercentage[_poolId]) /
                     100;
             }
             _amount = _tokenAmount - _reffer_usdt;
-            _referrerImmediateAmount = (_referrerAmount * 10) / 100;
-            VestingSchedule storage referrerSchedule = vestingSchedules[
-                _referrer
-            ];
-
-            if (referrerSchedule.vestingRecords[0].amount == 0) {
-                for (uint256 i = 0; i < TotalRound; i++) {
-                    referrerSchedule.vestingRecords[i] = VestingRecord({
-                        amount: (_referrerAmount * RoundVestingPercentage[i]) /
-                            100,
-                        deadline: roundDeadline[i],
-                        claimed: false
-                    });
-                }
-            } else {
-                for (uint256 i = 0; i < TotalRound; i++) {
-                    referrerSchedule.vestingRecords[i].amount +=
-                        (_referrerAmount * RoundVestingPercentage[i]) /
-                        100;
-                }
-            }
-
-            transferCurrency(
-                token,
-                treasuryWallet,
-                _referrer,
-                _referrerImmediateAmount
-            );
             transferCurrency(
                 tokenInfo[_tokenId]._tokenaddress,
                 address(this),
@@ -434,49 +253,20 @@ contract FOX_PRESALE is Ownable, ReentrancyGuard {
         );
     }
 
-    function releaseTokens() external nonReentrant {
-        VestingSchedule storage schedule = vestingSchedules[msg.sender];
-        require(schedule.immediateAmount > 0, "No tokens to release");
-        uint256 releasable;
-        for (uint256 i = 0; i < TotalRound; i++) {
-            if (
-                block.timestamp >=
-                schedule.vestingRecords[i].deadline + PRESALE_ENDTIME &&
-                !schedule.vestingRecords[i].claimed
-            ) {
-                releasable += schedule.vestingRecords[i].amount;
-                schedule.vestingRecords[i].claimed = true;
-            }
-        }
+  
 
-        require(releasable > 0, "No tokens are due");
-        transferCurrency(token, address(this), msg.sender, releasable);
-        emit TokensReleased(msg.sender, releasable);
-    }
 
-    function getTokenStatus(address beneficiary)
-        external
-        view
-        returns (uint256 claimable, uint256 locked)
-    {
-        VestingSchedule storage schedule = vestingSchedules[beneficiary];
 
-        uint256 _claimable = 0;
-        uint256 _locked = 0;
-
-        for (uint256 i = 0; i < TotalRound; i++) {
-            if (
-                block.timestamp >=
-                schedule.vestingRecords[i].deadline + PRESALE_ENDTIME &&
-                !schedule.vestingRecords[i].claimed
-            ) {
-                _claimable += schedule.vestingRecords[i].amount;
-            } else if (!schedule.vestingRecords[i].claimed) {
-                _locked += schedule.vestingRecords[i].amount;
-            }
-        }
-
-        return (_claimable, _locked);
+    function _nonblockingLzReceive(
+        uint16,
+        bytes memory,
+        uint64,
+        bytes memory _payload
+    ) internal virtual override {
+        (address _user, uint256 _amount) = abi.decode(
+            _payload,
+            (address, uint256)
+        );
     }
 
     function setPresaleEndTime(uint256 _PRESALE_ENDTIME) external onlyOwner {
