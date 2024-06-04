@@ -16,8 +16,6 @@ contract FOX_PRESALE is ReentrancyGuard, NonblockingLzApp {
     uint256 public PRESALE_START = 0;
     uint256 public PRESALE_ENDTIME = 0;
     uint256 constant TotalRound = 2;
-    uint256 public totalSold;
-    uint256 public totalRaised;
     uint256 public nextTokenId;
 
     address public treasuryWallet;
@@ -35,11 +33,6 @@ contract FOX_PRESALE is ReentrancyGuard, NonblockingLzApp {
         uint8 _decimals;
     }
 
-    struct VestingRecord {
-        uint256 amount;
-        uint256 deadline;
-        bool claimed;
-    }
 
     struct WhiteListedUsers {
         uint256 Percentage;
@@ -52,10 +45,6 @@ contract FOX_PRESALE is ReentrancyGuard, NonblockingLzApp {
         uint256 referral;
     }
 
-    struct VestingSchedule {
-        uint256 immediateAmount;
-        mapping(uint256 => VestingRecord) vestingRecords;
-    }
     mapping(uint256 => PresaleRound) public presalePool;
     mapping(uint256 => PaymentToken) public tokenInfo;
     mapping(uint256 => uint256) public roundDeadline;
